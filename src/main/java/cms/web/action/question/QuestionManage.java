@@ -15,8 +15,10 @@ import org.springframework.cache.annotation.Cacheable;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.google.common.util.concurrent.AtomicLongMap;
 
+import cms.bean.question.AppendQuestionItem;
 import cms.bean.question.Question;
 import cms.bean.question.QuestionTagAssociation;
 import cms.bean.setting.EditorTag;
@@ -26,9 +28,10 @@ import cms.service.question.AnswerService;
 import cms.service.question.QuestionService;
 import cms.service.staff.StaffService;
 import cms.service.user.UserService;
+import cms.utils.FileUtil;
 import cms.utils.JsonUtils;
-import cms.web.action.FileManage;
 import cms.web.action.TextFilterManage;
+import cms.web.action.fileSystem.FileManage;
 import cms.web.action.setting.SettingManage;
 /**
  * 问题管理
@@ -42,9 +45,9 @@ public class QuestionManage {
 	@Resource QuestionService questionService;
 	@Resource StaffService staffService;
 	@Resource UserService userService;
-	@Resource FileManage fileManage;
 	@Resource SettingManage settingManage;
 	@Resource AnswerService answerService;
+	@Resource FileManage fileManage;
 	
 	//key: 问题Id value:展示次数
     private AtomicLongMap<Long> countMap = AtomicLongMap.create();
@@ -174,14 +177,25 @@ public class QuestionManage {
 		String fileNumber = questionManage.generateFileNumber(userName, isStaff);
 		
 		while(true){
-			Map<Long,String> questionContentMap = questionService.findQuestionContentByPage(firstIndex, maxResult,userName,isStaff);
-			if(questionContentMap == null || questionContentMap.size() == 0){
+			List<Question> questionContentList = questionService.findQuestionContentByPage(firstIndex, maxResult,userName,isStaff);
+			if(questionContentList == null || questionContentList.size() == 0){
 				break;
 			}
 			firstIndex = firstIndex+maxResult;
-			for (Map.Entry<Long,String> entry : questionContentMap.entrySet()) { 
-				Long questionId = entry.getKey();
-				String questionContent = entry.getValue();
+			for (Question question :questionContentList) { 
+				Long questionId = question.getId();
+				String questionContent = question.getContent();
+				
+				
+				//删除最后一个逗号
+				String _appendContent = StringUtils.substringBeforeLast(question.getAppendContent(), ",");//从右往左截取到相等的字符,保留左边的
+
+				List<AppendQuestionItem> appendQuestionItemList = JsonUtils.toGenericObject(_appendContent+"]", new TypeReference< List<AppendQuestionItem> >(){});
+				if(appendQuestionItemList != null && appendQuestionItemList.size() >0){
+					for(AppendQuestionItem appendQuestionItem : appendQuestionItemList){
+						questionContent += appendQuestionItem.getContent();
+					}
+				}
 				
 				if(questionContent != null && !"".equals(questionContent.trim())){
 					Object[] obj = textFilterManage.readPathName(questionContent,"question");
@@ -215,20 +229,21 @@ public class QuestionManage {
 							
 							
 							 //如果验证不是当前用户上传的文件，则不删除
-							 if(!questionManage.getFileNumber(fileManage.getBaseName(filePath.trim())).equals(fileNumber)){
+							 if(!questionManage.getFileNumber(FileUtil.getBaseName(filePath.trim())).equals(fileNumber)){
 								 continue;
 							 }
 							
 							//替换路径中的..号
-							filePath = fileManage.toRelativePath(filePath);
-							
+							filePath = FileUtil.toRelativePath(filePath);
+							filePath = FileUtil.toSystemPath(filePath);
 							//删除旧路径文件
 							Boolean state = fileManage.deleteFile(filePath);
 							if(state != null && state == false){
 								 //替换指定的字符，只替换第一次出现的
-								filePath = StringUtils.replaceOnce(filePath, "file/question/", "");
+								filePath = StringUtils.replaceOnce(filePath, "file"+File.separator+"question"+File.separator, "");
+								
 								//创建删除失败文件
-								fileManage.failedStateFile("file"+File.separator+"question"+File.separator+"lock"+File.separator+filePath.replaceAll("/","_"));
+								fileManage.failedStateFile("file"+File.separator+"question"+File.separator+"lock"+File.separator+FileUtil.toUnderline(filePath));
 							}
 						}
 						
@@ -271,24 +286,23 @@ public class QuestionManage {
 					if(imageNameList != null && imageNameList.size() >0){
 						for(String imagePath : imageNameList){
 							//如果验证不是当前用户上传的文件，则不删除锁
-							 if(!questionManage.getFileNumber(fileManage.getBaseName(imagePath.trim())).equals(fileNumber)){
+							 if(!questionManage.getFileNumber(FileUtil.getBaseName(imagePath.trim())).equals(fileNumber)){
 								 continue;
 							 }
 							
 							
 							//替换路径中的..号
-							imagePath = fileManage.toRelativePath(imagePath);
-							//替换路径分割符
-							imagePath = StringUtils.replace(imagePath, "/", File.separator);
+							imagePath = FileUtil.toRelativePath(imagePath);
+							
+							imagePath = FileUtil.toSystemPath(imagePath);
 							
 							Boolean state = fileManage.deleteFile(imagePath);
 							if(state != null && state == false){	
 								//替换指定的字符，只替换第一次出现的
 								imagePath = StringUtils.replaceOnce(imagePath, "file"+File.separator+"answer"+File.separator, "");
-								imagePath = StringUtils.replace(imagePath, File.separator, "_");//替换所有出现过的字符
 								
 								//创建删除失败文件
-								fileManage.failedStateFile("file"+File.separator+"answer"+File.separator+"lock"+File.separator+imagePath);
+								fileManage.failedStateFile("file"+File.separator+"answer"+File.separator+"lock"+File.separator+FileUtil.toUnderline(imagePath));
 							
 							}
 						}

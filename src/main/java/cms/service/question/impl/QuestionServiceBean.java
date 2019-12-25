@@ -1,9 +1,9 @@
 package cms.service.question.impl;
 
 
+import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Date;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -14,12 +14,20 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+
+import cms.bean.payment.PaymentLog;
 import cms.bean.question.Question;
 import cms.bean.question.QuestionTagAssociation;
+import cms.bean.user.PointLog;
 import cms.service.besa.DaoSupport;
+import cms.service.favorite.FavoriteService;
 import cms.service.message.RemindService;
 import cms.service.question.QuestionService;
+import cms.service.user.UserService;
 import cms.utils.ObjectConversion;
+import cms.web.action.SystemException;
+import cms.web.action.payment.PaymentManage;
+import cms.web.action.user.PointManage;
 
 /**
  * 问题管理实现类
@@ -29,8 +37,11 @@ import cms.utils.ObjectConversion;
 @Transactional
 public class QuestionServiceBean extends DaoSupport<Question> implements QuestionService{
 	
-	@Resource  RemindService remindService;
-	
+	@Resource RemindService remindService;
+	@Resource FavoriteService favoriteService;
+	@Resource UserService userService;
+	@Resource PointManage pointManage;
+	@Resource PaymentManage paymentManage;
 	
 	/**
 	 * 根据Id查询问题
@@ -95,7 +106,7 @@ public class QuestionServiceBean extends DaoSupport<Question> implements Questio
 	public List<Question> findQuestionByQuestionIdList(List<Long> questionIdList){
 		List<Question> questionList = new ArrayList<Question>();
 		
-		Query query = em.createQuery("select o.id,o.title,o.content," +
+		Query query = em.createQuery("select o.id,o.title,o.content,o.appendContent," +
 				"o.postTime,o.userName,o.isStaff,o.status " +
 				" from Question o where o.id in(:questionId)");
 		query.setParameter("questionId", questionIdList);	
@@ -108,15 +119,17 @@ public class QuestionServiceBean extends DaoSupport<Question> implements Questio
 				Long id = (Long)obj[0];
 				String title = (String)obj[1];
 				String content = (String)obj[2];
-				Date postTime = (Date)obj[3];
-				String userName = (String)obj[4];
-				Boolean isStaff = (Boolean)obj[5];
-				Integer status = (Integer)obj[6];
+				String appendContent = (String)obj[3];
+				Date postTime = (Date)obj[4];
+				String userName = (String)obj[5];
+				Boolean isStaff = (Boolean)obj[6];
+				Integer status = (Integer)obj[7];
 
 				Question question = new Question();
 				question.setId(id);
 				question.setTitle(title);
 				question.setContent(content);
+				question.setAppendContent(appendContent);
 				question.setPostTime(postTime);
 				question.setUserName(userName);
 				question.setIsStaff(isStaff);
@@ -137,10 +150,10 @@ public class QuestionServiceBean extends DaoSupport<Question> implements Questio
 	 * @return
 	 */
 	@Transactional(readOnly=true,propagation=Propagation.NOT_SUPPORTED)
-	public Map<Long,String> findQuestionContentByPage(int firstIndex, int maxResult,String userName,boolean isStaff){
-		Map<Long,String> questionContentList = new HashMap<Long,String>();//key:问题Id  value:问题内容
+	public List<Question> findQuestionContentByPage(int firstIndex, int maxResult,String userName,boolean isStaff){
+		List<Question> questionContentList = new ArrayList<Question>();
 		
-		String sql = "select o.id,o.content from Question o where o.userName=?1 and o.isStaff=?2";
+		String sql = "select o.id,o.content,o.appendContent from Question o where o.userName=?1 and o.isStaff=?2";
 		Query query = em.createQuery(sql);	
 		query.setParameter(1, userName);
 		query.setParameter(2, isStaff);
@@ -155,7 +168,13 @@ public class QuestionServiceBean extends DaoSupport<Question> implements Questio
 				Object[] obj = (Object[])objectList.get(i);
 				Long id = (Long)obj[0];
 				String content = (String)obj[1];
-				questionContentList.put(id, content);
+				String appendContent = (String)obj[2];
+				
+				Question question = new Question();
+				question.setId(id);
+				question.setContent(content);
+				question.setAppendContent(appendContent);
+				questionContentList.add(question);
 			}
 		}
 		
@@ -171,7 +190,7 @@ public class QuestionServiceBean extends DaoSupport<Question> implements Questio
 	public List<Question> findQuestionByPage(int firstIndex, int maxResult){
 		List<Question> questionList = new ArrayList<Question>();
 		
-		String sql = "select o.id,o.title,o.content," +
+		String sql = "select o.id,o.title,o.content,o.appendContent," +
 				"o.postTime,o.userName,o.isStaff,o.status " +
 				" from Question o ";
 
@@ -189,15 +208,17 @@ public class QuestionServiceBean extends DaoSupport<Question> implements Questio
 				Long id = (Long)obj[0];
 				String title = (String)obj[1];
 				String content = (String)obj[2];
-				Date postTime = (Date)obj[3];
-				String userName = (String)obj[4];
-				Boolean isStaff = (Boolean)obj[5];
-				Integer status = (Integer)obj[6];
+				String appendContent = (String)obj[3];
+				Date postTime = (Date)obj[4];
+				String userName = (String)obj[5];
+				Boolean isStaff = (Boolean)obj[6];
+				Integer status = (Integer)obj[7];
 
 				Question question = new Question();
 				question.setId(id);
 				question.setTitle(title);
 				question.setContent(content);
+				question.setAppendContent(appendContent);
 				question.setPostTime(postTime);
 				question.setUserName(userName);
 				question.setIsStaff(isStaff);
@@ -227,18 +248,65 @@ public class QuestionServiceBean extends DaoSupport<Question> implements Questio
 	 * 保存问题
 	 * @param question 问题
 	 * @param questionTagAssociationList 问题标签关联集合
+	 * @param point 扣减用户积分
+	 * @param pointLog 积分日志
+	 * @param amount 扣减用户预存款
+	 * @param paymentLog 支付日志
 	 */
-	public void saveQuestion(Question question,List<QuestionTagAssociation> questionTagAssociationList){
+	public void saveQuestion(Question question,List<QuestionTagAssociation> questionTagAssociationList,Long point,PointLog pointLog,BigDecimal amount,PaymentLog paymentLog){
 		this.save(question);
 		
 		for(QuestionTagAssociation questionTagAssociation : questionTagAssociationList){
 			questionTagAssociation.setQuestionId(question.getId());
 			this.save(questionTagAssociation);
 		}
+		if(point != null && point >0L){//积分
+			pointLog.setParameterId(question.getId());
+			Object pointLogObject = pointManage.createPointLogObject(pointLog);
+			//扣减用户积分
+			int i = userService.subtractUserPoint(question.getUserName(),point, pointLogObject);
+			if(i == 0){
+				throw new SystemException("扣减积分失败");
+			}
+		}
+		if(amount != null && amount.compareTo(new BigDecimal("0")) >0){//余额
+			paymentLog.setParameterId(question.getId());
+			Object paymentLogObject = paymentManage.createPaymentLogObject(paymentLog);
+			//扣减用户预存款
+			int i = userService.subtractUserDeposit(question.getUserName(), amount, paymentLogObject);
+			if(i ==0){
+				throw new SystemException("扣减预存款失败");
+			}
+		}
 	}
 	
 	
-	
+	/**
+	 * 保存追加问题
+	 * @param questionId 问题Id
+	 * @param appendContent 追加问题内容 AppendQuestionItem对象的JSON格式加上逗号
+	 * @return
+	 */
+	public Integer saveAppendQuestion(Long questionId,String appendContent){
+		
+		Query query = em.createQuery("update Question o set o.appendContent=CONCAT(o.appendContent,?1) where o.id=?2")
+				.setParameter(1, appendContent)
+				.setParameter(2, questionId);
+		return query.executeUpdate();
+	}
+	/**
+	 * 修改追加问题
+	 * @param questionId 问题Id
+	 * @param appendContent 追加问题内容
+	 * @return
+	 */
+	public Integer updateAppendQuestion(Long questionId,String appendContent){
+		
+		Query query = em.createQuery("update Question o set o.appendContent=?1 where o.id=?2")
+				.setParameter(1, appendContent)
+				.setParameter(2, questionId);
+		return query.executeUpdate();
+	}
 	
 	
 	/**
@@ -275,18 +343,27 @@ public class QuestionServiceBean extends DaoSupport<Question> implements Questio
 	 * 修改问题
 	 * @param question 问题
 	 * @param questionTagAssociationList 问题标签关联集合
+	 * @param changePointSymbol 变更积分符号 true：问题增加积分  false：问题减少积分
+	 * @param changePoint 变更积分
+	 * @param changeAmountSymbol 变更金额符号 true：问题增加金额  false：问题减少金额
+	 * @param changeAmount 变更金额
+	 * @param pointLogObject 用户悬赏积分日志
+	 * @param paymentLogObject 用户悬赏金额日志
 	 * @return
 	 */
-	public Integer updateQuestion(Question question,List<QuestionTagAssociation> questionTagAssociationList){
-		Query query = em.createQuery("update Question o set o.title=?1, o.content=?2,o.summary=?3,o.allow=?4,o.status=?5,o.sort=?6,o.lastUpdateTime=?7 where o.id=?8")
+	public Integer updateQuestion(Question question,List<QuestionTagAssociation> questionTagAssociationList,
+			boolean changePointSymbol,Long changePoint, boolean changeAmountSymbol, BigDecimal changeAmount,Object pointLogObject,Object paymentLogObject){
+		
+		Query query = em.createQuery("update Question o set o.title=?1, o.content=?2,o.summary=?3,o.allow=?4,o.status=?5,o.sort=?6,o.point=?7,o.amount=?8 where o.id=?9")
 		.setParameter(1, question.getTitle())
 		.setParameter(2, question.getContent())
 		.setParameter(3, question.getSummary())
 		.setParameter(4, question.isAllow())
 		.setParameter(5, question.getStatus())
 		.setParameter(6, question.getSort())
-		.setParameter(7, question.getLastUpdateTime())
-		.setParameter(8, question.getId());
+		.setParameter(7, question.getPoint())
+		.setParameter(8, question.getAmount())
+		.setParameter(9, question.getId());
 		int i = query.executeUpdate();
 		
 		if(i >0){
@@ -299,6 +376,32 @@ public class QuestionServiceBean extends DaoSupport<Question> implements Questio
 			for(QuestionTagAssociation questionTagAssociation : questionTagAssociationList){
 				questionTagAssociation.setQuestionId(question.getId());
 				this.save(questionTagAssociation);
+			}
+			
+			if(pointLogObject != null){
+				if(changePointSymbol){
+					//扣减用户积分
+					int j = userService.subtractUserPoint(question.getUserName(),changePoint, pointLogObject);
+					if(j == 0){
+						throw new SystemException("扣减积分失败");
+					}
+				}else{
+					//增加用户积分
+					userService.addUserPoint(question.getUserName(),changePoint,pointLogObject);
+					
+				}
+			}
+			if(paymentLogObject != null){
+				if(changeAmountSymbol){//增加
+					//扣减用户预存款
+					int j = userService.subtractUserDeposit(question.getUserName(), changeAmount, paymentLogObject);
+					if(j ==0){
+						throw new SystemException("扣减预存款失败");
+					}
+				}else{
+					//增加用户预存款
+					userService.addUserDeposit(question.getUserName(), changeAmount, paymentLogObject);	
+				}
 			}
 		}
 		
@@ -402,9 +505,14 @@ public class QuestionServiceBean extends DaoSupport<Question> implements Questio
 	/**
 	 * 删除问题
 	 * @param questionId 问题Id
+	 * @param userName 用户名称
+	 * @param point 扣减用户积分
+	 * @param pointLogObject 积分日志
+	 * @param amount 扣减用户预存款
+	 * @param paymentLogObject 支付日志
 	 * @return
 	 */
-	public Integer deleteQuestion(Long questionId){
+	public Integer deleteQuestion(Long questionId,String userName,Long point,Object pointLogObject,BigDecimal amount,Object paymentLogObject){
 		int i = 0;
 		Query delete = em.createQuery("delete from Question o where o.id=?1")
 		.setParameter(1, questionId);
@@ -424,7 +532,17 @@ public class QuestionServiceBean extends DaoSupport<Question> implements Questio
 		remindService.deleteRemindByQuestionId(questionId);
 		
 		//删除收藏
-	//	favoriteService.deleteFavoriteByTopicId(topicId);
+		favoriteService.deleteFavoriteByQuestionId(questionId);
+		
+		if(point != null && point >0L){//积分
+			//增加用户积分
+			userService.addUserPoint(userName,point,pointLogObject);
+
+		}
+		if(amount != null && amount.compareTo(new BigDecimal("0")) >0){//余额
+			//增加用户预存款
+			userService.addUserDeposit(userName, amount, paymentLogObject);
+		}
 		
 		return i;
 	}

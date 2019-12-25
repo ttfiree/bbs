@@ -35,6 +35,7 @@ import cms.service.user.UserGradeService;
 import cms.service.user.UserService;
 import cms.utils.JsonUtils;
 import cms.utils.Verification;
+import cms.web.action.fileSystem.FileManage;
 
 /**
  * 用户管理 分页显示 查询结果显示
@@ -54,6 +55,10 @@ public class UserAction {
 	@Resource SettingService settingService;
 	
 	
+	
+	
+	
+		
 	/**
 	 * 用户列表
 	 * @param formbean
@@ -69,6 +74,7 @@ public class UserAction {
 	public String execute(User formbean,PageForm pageForm,Boolean queryState,ModelMap model,
 			HttpServletRequest request, HttpServletResponse response)
 			throws Exception {	
+			
 		
 		//调用分页算法代码
 		PageView<User> pageView = new PageView<User>(settingService.findSystemSetting_cache().getBackstagePageNumber(),pageForm.getPage(),10);
